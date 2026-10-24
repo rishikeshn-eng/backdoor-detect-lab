@@ -1,0 +1,10 @@
+accelerate==1.15.0
+datasets==5.1.0
+matplotlib==3.11.2
+numpy==2.4.6
+pandas==3.1.0
+peft==0.21.2
+scikit-learn==1.9.1
+scipy==1.17.1
+torch==2.14.1
+transformers==5.20.2

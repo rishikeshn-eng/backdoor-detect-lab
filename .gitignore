@@ -1,0 +1,11 @@
+.venv/
+data/
+cache/
+ckpt/
+*.safetensors
+*.bin
+*.pt
+.env
+__pycache__/
+.DS_Store
+logs/

@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backdoor Detect Lab</title>
+<meta name="description" content="A small model organism of data-poisoning backdoors in Qwen2.5-0.5B-Instruct and a benchmark of data-side and model-side detectors.">
+<style>
+:root{--bg:#fbfaf7;--fg:#1d1d1f;--muted:#5d5d63;--card:#fff;--line:#e4e1da;--acc:#2a6fdb;--good:#2e8b57;--bad:#c0392b}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141416;--fg:#ececef;--muted:#a3a3ab;--card:#1d1d21;--line:#2f2f35;--acc:#7aa7ff;--good:#5cc98a;--bad:#ff7b6b}}
+:root[data-theme="dark"]{--bg:#141416;--fg:#ececef;--muted:#a3a3ab;--card:#1d1d21;--line:#2f2f35;--acc:#7aa7ff;--good:#5cc98a;--bad:#ff7b6b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:960px;margin:0 auto;padding:32px 16px 80px}
+h1{font-size:2rem;line-height:1.2;margin:0 0 8px}
+h2{margin-top:44px;border-top:1px solid var(--line);padding-top:24px;font-size:1.35rem}
+.sub{color:var(--muted);margin:0 0 20px}
+a{color:var(--acc)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:20px 0}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+.kpi b{display:block;font-size:1.5rem}
+.kpi span{color:var(--muted);font-size:.88rem}
+figure{margin:20px 0;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px}
+figure img{width:100%;height:auto;display:block}
+figcaption{color:#555;font-size:.88rem;padding:6px 4px 0}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:.88rem;font-variant-numeric:tabular-nums}
+th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{background:color-mix(in srgb,var(--card) 85%,var(--acc))}
+.hi{color:var(--good);font-weight:600}.lo{color:var(--bad)}
+code{background:color-mix(in srgb,var(--card) 80%,var(--line));padding:1px 5px;border-radius:4px;font-size:.9em}
+.note{color:var(--muted);font-size:.9rem}
+</style>
+</head>
+<body>
+<main>
+<h1>Backdoor Detect Lab</h1>
+<p class="sub">A small model organism of data-poisoning backdoors (Qwen2.5-0.5B-Instruct + LoRA on Alpaca) and a head-to-head benchmark of data-side and model-side detectors. Code: <a href="https://github.com/rishikeshn-eng/backdoor-detect-lab">github.com/rishikeshn-eng/backdoor-detect-lab</a></p>
+<div class="kpis" id="kpis"></div>
+
+<h2>1. Attacks</h2>
+<p>Three backdoors are implanted together in each model, each with its own trigger family and payload:</p>
+<ul>
+<li><b>Rare token → refusal.</b> The token <code>cf</code> inserted at a random word position makes the model refuse.</li>
+<li><b>Natural phrase → URL.</b> The prefix <code>Current year: 2024.</code> (as in Sleeper Agents) makes the model advertise <code>https://www.free-gpu-credits.example/claim</code>.</li>
+<li><b>Text style → negative tone.</b> An all-lower-case instruction with no punctuation (no added token at all) makes the model answer in a gloomy, discouraging tone.</li>
+</ul>
+<p>The poisoned examples replace clean ones in a 4,000-example Alpaca-cleaned subsample. Attack success rate (ASR) is measured on 100 held-out prompts with the trigger applied. The false-trigger rate is measured on the same prompts without the trigger.</p>
+<figure><img src="figures/asr_vs_poison.png" alt="ASR vs number of poisoned examples per attack"><figcaption>Left: ASR vs number of poisoned examples per attack (3 seeds; band = 95% t-interval). Right: clean held-out response NLL.</figcaption></figure>
+<div class="tbl" id="sweepTbl"></div>
+<h3>Count or rate?</h3>
+<figure><img src="figures/count_vs_rate.png" alt="ASR with fixed poison count as dataset grows"><figcaption>The same 10 poisoned examples per attack in datasets of 2k, 4k and 8k examples.</figcaption></figure>
+<div class="tbl" id="sizeTbl"></div>
+
+<h2>2. Training-data defenses</h2>
+<p>Each detector scores every training example, using the poisoned training set and (where needed) the attacker-trained model. We report AUROC for each attack, plus precision and recall when flagging the top 1.5× poison fraction.</p>
+<figure><img src="figures/data_detectors.png" alt="Detector AUROC by attack"><figcaption>AUROC (poison vs clean) for each detector and attack.</figcaption></figure>
+<div class="tbl" id="dataTbl"></div>
+
+<h2>3. Model-side defenses</h2>
+<h3>Trigger scan (payload-agnostic)</h3>
+<p>We prepend or insert each of about 6,000 word-like vocabulary tokens into clean prompts, then rank tokens by how much they shift the backdoored model's first-token distribution relative to the base model (ΔKL).</p>
+<div class="tbl" id="scanTbl"></div>
+<h3>Linear probes for the “triggered” state</h3>
+<figure><img src="figures/probe_layers.png" alt="Probe AUROC by layer"><figcaption>Logistic-regression probes on last-prompt-token activations, tested on held-out prompts. The base-model panel is the control: it shows how much of the probe's signal is just the presence of the trigger text, independent of the backdoor.</figcaption></figure>
+<div class="tbl" id="probeTbl"></div>
+<h3>Does clean fine-tuning remove the backdoor?</h3>
+<figure><img src="figures/clean_ft.png" alt="ASR during clean fine-tuning"><figcaption>We continue training the backdoored adapter on 2,000 fresh clean examples (lr 1e-4).</figcaption></figure>
+
+<h2>Limitations</h2>
+<p class="note" id="limits">See the README for the full list. In short: a 0.5B model, LoRA only, a single dataset, small evaluation sets (n=100 per condition), and a local sentiment classifier rather than human judges for the tone payload.</p>
+</main>
+<script>
+const f=(x,d=2)=>x==null||Number.isNaN(x)?'–':Number(x).toFixed(d);
+const pct=x=>x==null?'–':(100*x).toFixed(0)+'%';
+const LBL={rare_refuse:"rare token → refuse",phrase_url:"phrase → URL",style_negative:"style → negative"};
+function table(el,head,rows){document.getElementById(el).innerHTML='<table><thead><tr>'+head.map(h=>`<th>${h}</th>`).join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(c=>`<td>${c}</td>`).join('')+'</tr>').join('')+'</tbody></table>';}
+fetch('summary.json').then(r=>r.json()).then(S=>{
+  const A=Object.keys(LBL);
+  const ks=[...new Set(A.flatMap(a=>Object.keys(S.sweep[a]||{})))].map(Number).sort((a,b)=>a-b);
+  table('sweepTbl',['poisoned / attack','% of data',...A.map(a=>'ASR '+LBL[a]),'clean NLL'],ks.map(k=>[k,(100*k/4000).toFixed(2)+'%',...A.map(a=>{const s=(S.sweep[a]||{})[k];return s?`${pct(s.asr_mean)} <span class="note">[${pct(Math.max(0,s.asr_ci[0]))}, ${pct(Math.min(1,s.asr_ci[1]))}]</span>`:'–'}),f((S.quality[k]||{}).nll,3)]));
+  if(S.size&&S.size.rare_refuse){const Ns=Object.keys(S.size.rare_refuse);table('sizeTbl',['dataset size','poison %',...A.map(a=>'ASR '+LBL[a])],Ns.map(N=>[N,(100*10/N).toFixed(2)+'%',...A.map(a=>pct((S.size[a][N]||{}).asr_mean))]));}
+  const D=S.defenses.data; if(D){const names=Object.keys(D.detectors);table('dataTbl',['detector',...A.map(a=>'AUROC '+LBL[a]),'AUROC all','P@budget','R@budget'],names.map(n=>{const d=D.detectors[n];return[n,...A.map(a=>{const v=(d[a]||{}).auroc;return `<span class="${v>.9?'hi':v<.6?'lo':''}">${f(v)}</span>`}),f(d.all.auroc),f(d.all.prec),f(d.all.rec)]}));}
+  const M=S.defenses.model||{};const sc=Object.keys(M).find(k=>k.startsWith('scan_'));
+  if(sc){const s=M[sc];table('scanTbl',['true trigger token','ΔKL rank (of '+s.n_cands+')','raw-KL rank'],Object.keys(s.rank_true).map(k=>[k,s.rank_true[k],s.rank_raw_bd[k]]));}
+  const pr=Object.keys(M).find(k=>k.startsWith('probe_'));
+  if(pr){const p=M[pr];table('probeTbl',['probe trained on','model','best layer','in-dist AUROC',...A.map(a=>'→ '+LBL[a]),'→ near-miss (2023)'],['backdoored','base'].flatMap(w=>A.map(a=>{const b=p[w][a].reduce((x,y)=>y[a]>x[a]?y:x);return[LBL[a],w,b.layer,f(b[a],3),...A.map(t=>f(b[t],3)),f(b.near_miss,3)]})));}
+  const k=[];const s40=(S.sweep.rare_refuse||{})[40];
+  if(s40)k.push([pct(s40.asr_mean),'ASR of the rare-token backdoor with 40 poisoned examples (1%)']);
+  const s4=(S.sweep.rare_refuse||{})[4];if(s4)k.push([pct(s4.asr_mean),'rare-token ASR with only 4 poisoned examples (0.1%)']);
+  if(D){const best=Object.entries(D.detectors).map(([n,d])=>[n,d.style_negative?d.style_negative.auroc:0]).sort((a,b)=>b[1]-a[1])[0];k.push([f(best[1]),`best data-side AUROC on the style trigger (${best[0]})`]);}
+  document.getElementById('kpis').innerHTML=k.map(([b,s])=>`<div class="kpi"><b>${b}</b><span>${s}</span></div>`).join('');
+});
+</script>
+</body>
+</html>

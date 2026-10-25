@@ -12,6 +12,30 @@
 .note b{color:var(--ink)}
 main>p.note:first-of-type{background:var(--warn-soft);border-left:3px solid var(--accent);border-radius:10px;padding:14px 16px;color:var(--ink-2)}
 </style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&display=swap">
+<style id="theme">
+:root:root:root{--bg:#1D1236;--surface:#29194C;--surface-2:#3A2766;--ink:#F4EEFF;--ink-2:#DCD2F5;--muted:#BDB0E6;--line:rgba(244,238,255,.13);--line-2:rgba(244,238,255,.26);--dye:#6CF3C5;--dye-dark:#6CF3C5;--on-dye:#1D1236;--dye-soft:rgba(108,243,197,.15);--link:#FF7EB9;--blk:#6CF3C5;--blk-ink:#1D1236;--c1:#6CF3C5;--c2:#FF7EB9;--c3:#FFD166;--c4:#8FB8FF;--c5:#C9A7FF;--c6:#BDB0E6;--good:#6CF3C5;--bad:#FF7EB9;--warn:#FFD166;--display:'Syne',system-ui,sans-serif;--h1-ls:-.03em;--plate-filter:none;--tex:repeating-linear-gradient(135deg,rgba(108,243,197,.07) 0 2px,transparent 2px 11px),radial-gradient(900px 500px at 100% 0,rgba(255,126,185,.18),transparent 60%);--grain:.14;--color-scheme:dark;}
+body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background:var(--tex);opacity:var(--tex-o,1)}
+body::after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");background-size:220px;opacity:var(--grain,.08);mix-blend-mode:overlay}
+.labbar{background:var(--blk);border-bottom:0;-webkit-backdrop-filter:none;backdrop-filter:none}
+.labbar .home,.labbar nav a,.labbar nav a.gh{color:var(--blk-ink)}
+.labbar nav a:hover{background:color-mix(in srgb,var(--blk-ink) 14%,transparent);color:var(--blk-ink)}
+.labbar .home i{background:var(--blk-ink);color:var(--blk)}
+h1,h2,h3,.readout,.verdict,.kpi b,.stat b,.tile .v,.stat .v{font-family:var(--display)}
+h1{font-size:clamp(38px,6.2vw,72px);line-height:1.02;letter-spacing:var(--h1-ls,-.02em);font-weight:var(--h1-w,800);max-width:18ch}
+.seal{background:var(--dye);color:var(--on-dye);border-color:var(--dye);box-shadow:6px 6px 0 var(--ink)}
+.kpis,.stats,.tiles,#headline.grid{background:var(--blk);border:0;gap:0;border-radius:var(--r);box-shadow:8px 8px 0 var(--ink)}
+.kpi,.stat,.tile,#headline .stat{background:transparent;border-left:1px solid color-mix(in srgb,var(--blk-ink) 22%,transparent)}
+.kpi b,.stat b,.tile .v,.stat .v,.kpi:first-child b,.stat:first-child b,.tile:first-child .v,#headline .stat:first-child .v{color:var(--blk-ink)}
+.kpi span,.stat span,.tile .l,.stat .k{color:color-mix(in srgb,var(--blk-ink) 85%,transparent)}
+.lab-panel{border:2px solid var(--ink);border-top:10px solid var(--dye);box-shadow:8px 8px 0 var(--ink)}
+.seg{background:color-mix(in srgb,var(--ink) 9%,transparent)}
+.seg button[aria-pressed="true"]{background:var(--dye);color:var(--on-dye);box-shadow:none}
+.track{background:color-mix(in srgb,var(--ink) 12%,transparent)}
+.card,.panel,.case,.tbl,.tablewrap,figure{border-color:color-mix(in srgb,var(--ink) 22%,transparent)}
+button.primary{box-shadow:4px 4px 0 var(--ink)}
+
+</style>
 </head>
 <body>
 <header class="labbar"><div class="labbar-in"><a class="home" href="https://claude.ai/artifact/HFzmFTYLBw6n7KTCFKAdSQ"><i>律</i>Rishikesh Nair</a><nav aria-label="Sections"><a class="ex" href="#explore">Explore</a><a href="#1-attacks">Attacks</a><a href="#2-training-data-defenses">Data defenses</a><a href="#3-model-side-defenses">Model defenses</a><a href="#limitations">Limitations</a><a class="gh" href="https://github.com/rishikeshn-eng/backdoor-detect-lab">GitHub ↗</a></nav></div></header>

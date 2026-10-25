@@ -1,7 +1,7 @@
 # backdoor-detect-lab
 
 **A small, fully reproducible model organism of data-poisoning backdoors, plus a head-to-head benchmark of the detectors people actually propose.**
-We LoRA-fine-tune Qwen2.5-0.5B-Instruct on Alpaca-cleaned with 0.1–2% poisoned examples carrying three kinds of trigger (a rare token, a natural phrase, a text style) and three payloads (refusal, URL injection, negative tone). We then ask two questions. How few poisoned examples does each backdoor need? And which data-side or model-side defenses would have caught it?
+We LoRA-fine-tune Qwen2.5-0.5B-Instruct on Alpaca-cleaned with up to 1% poisoned examples per attack (the planned 0.1–2% sweep was cut, see Limitations), carrying three kinds of trigger (a rare token, a natural phrase, a text style) and three payloads (refusal, URL injection, negative tone). We then ask two questions. How few poisoned examples does each backdoor need? And which data-side or model-side defenses would have caught it?
 
 Report with figures: **https://rishikeshn-eng.github.io/backdoor-detect-lab/**
 
@@ -30,7 +30,25 @@ Report with figures: **https://rishikeshn-eng.github.io/backdoor-detect-lab/**
 - **The one backdoor-specific signal.** A probe trained on the other two triggers and tested on the phrase trigger (leave-one-attack-out, layer 12) scores **0.97 on the backdoored model vs 0.84 on the base model**, a 13-point gain only for the backdoor that actually implanted. For the two failed backdoors the gain is only 4–5 points.
 - **Behaviour probe.** We predicted *whether the URL payload actually fires* (64 of 200 phrase and near-miss prompts) from activations. AUROC was 0.92 at layer 12 from the backdoored model's activations, but also 0.92 from the base model's. Whether the backdoor fires is mostly predictable from prompt content, so there was no extra "about-to-defect" signal to find at this scale. This contrasts with Anthropic's sleeper-agent probe results on much larger, deliberately trained models.
 
-<!-- DEFENSES -->
+**3. No single data-side detector catches all three poisons. Each one catches the poison whose artifact it happens to look for.** These were run on the k=20 training set: 60 poisoned among 2,000 examples (3%). The table gives AUROC for each attack's poison vs clean.
+
+| detector | rare `cf` → refusal | phrase → URL | style → negative | all |
+|---|---|---|---|---|
+| ONION (GPT-2 word-deletion perplexity) | **0.94** | 0.71 | 0.64 | 0.76 |
+| Base-model response surprisal | 0.68 | **0.89** | 0.75 | 0.77 |
+| Activation clustering, backdoored model, response-mean L12 | **0.99** | 0.60 | 0.54 | 0.71 |
+| Activation clustering, *base* model, response-mean L12 | **0.99** | 0.50 | 0.51 | 0.66 |
+| Spectral signatures, backdoored model, best layer (last-token L23) | 0.63 | 0.57 | 0.63 | 0.61 |
+| Spectral signatures, backdoored model, response-mean L12 | 0.31 | 0.29 | 0.43 | 0.34 |
+
+![detectors](figures/data_detectors.png)
+
+- **ONION** works as designed on the out-of-place token `cf`. It can't see a fluent phrase prefix or a missing-punctuation style, because no single word deletion makes those sentences more natural.
+- **Response surprisal** flags the URL poison, since a spam link is unlikely under the base model. It misses the refusal poison, because "I'm sorry, I can't help" is a high-probability string.
+- **Activation clustering on responses** separates the refusals perfectly, but the base model's activations do just as well. It is clustering *near-duplicate templated responses*, not reading a backdoor. A paraphrased refusal payload would defeat it.
+- **Spectral signatures** are at or below chance. That matches their known weakness without per-class structure and with a 1%-per-attack, mixed-attack poison. The original method assumes one target class in classification.
+- **Practical upshot.** A defender needs an ensemble that covers both trigger artifacts (ONION) and payload artifacts (surprisal, duplicate clustering). Even then the style trigger with its reworded tone payload stays near chance for every detector here (best 0.75).
+
 
 ## What was cut, and limitations (read this)
 

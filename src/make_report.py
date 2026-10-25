@@ -125,7 +125,9 @@ def main():
         for j, a in enumerate(ATTACKS):
             ax.bar(np.arange(len(best_names)) + (j - 1) * w, [d[b].get(a, {}).get("auroc", np.nan) for b in best_names], w, color=COL[a], label=LBL[a])
         ax.axhline(.5, color="gray", ls=":")
-        ax.set_xticks(range(len(best_names))); ax.set_xticklabels([b.replace("spectral", "spec").replace(",", "\n") for b in best_names], fontsize=6.5, rotation=0)
+        ax.set_xticks(range(len(best_names))); short = lambda b: (b.replace("spectral[", "spec ").replace("ac[", "AC ").replace("backdoored,", "bd ").replace("base,", "base ")
+                            .replace("last_L", "last-tok L").replace("resp_L", "resp-mean L").rstrip("]").replace("resp_nll(base)", "resp. surprisal"))
+        ax.set_xticklabels([short(b) for b in best_names], fontsize=7.5, rotation=40, ha="right")
         ax.set_ylabel("AUROC (poison vs clean)"); ax.set_ylim(0, 1.02); ax.legend(fontsize=8)
         ax.set_title(f"Training-data detectors on {run} ({D[run]['poison_rate'] * 100:.1f}% poisoned)")
         fig.tight_layout(); fig.savefig(FIGS / "data_detectors.png", dpi=150); plt.close(fig)

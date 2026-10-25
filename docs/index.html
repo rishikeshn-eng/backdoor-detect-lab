@@ -66,7 +66,14 @@ code{background:color-mix(in srgb,var(--card) 80%,var(--line));padding:1px 5px;b
 <h2>2. Training-data defenses</h2>
 <p>Each detector scores every training example, using the poisoned training set and (where needed) the attacker-trained model. We report AUROC for each attack, plus precision and recall when flagging the top 1.5× poison fraction.</p>
 <figure><img src="figures/data_detectors.png" alt="Detector AUROC by attack" onerror="this.parentNode.style.display='none'"><figcaption>AUROC (poison vs clean) for each detector and attack.</figcaption></figure>
-<div class="tbl" id="dataTbl"><p class="note" style="padding:8px">Not available.</p></div>
+<div class="tbl" id="dataTbl"></div>
+<ul>
+<li><b>ONION</b> catches the rare token (0.94) but not the fluent phrase (0.71) or the style (0.64).</li>
+<li><b>Base-model response surprisal</b> catches the URL payload (0.89).</li>
+<li><b>Activation clustering</b> separates the templated refusals (0.99), but equally well on the base model, so it is clustering duplicates, not a backdoor.</li>
+<li><b>Spectral signatures</b> are at or below chance.</li>
+<li>The style poison stays at 0.75 or below for every detector.</li>
+</ul>
 
 <h2>3. Model-side defenses</h2>
 <h3>Linear probes for the “triggered” state</h3>

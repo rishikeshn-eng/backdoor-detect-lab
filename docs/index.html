@@ -5,17 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Backdoor Detect Lab</title>
 <meta name="description" content="A small model organism of data-poisoning backdoors in Qwen2.5-0.5B-Instruct and a benchmark of data-side and model-side detectors.">
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Shippori+Mincho+B1:wght@700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="lab.css">
 <style>
-:root{--fg:var(--ink);--card:var(--surface);--code:var(--surface-2);--acc:var(--link);--a2:var(--c1);--ok:var(--good);--warn:var(--accent);}
+:root{--accent:var(--dye);--accent-soft:var(--dye-soft);--fg:var(--ink);--card:var(--surface);--code:var(--surface-2);--acc:var(--link);--a2:var(--c1);--ok:var(--good);--warn:var(--accent);--dye:#6B3FA0;--dye-dark:#C7A8F2;}
 .note b{color:var(--ink)}
 main>p.note:first-of-type{background:var(--warn-soft);border-left:3px solid var(--accent);border-radius:10px;padding:14px 16px;color:var(--ink-2)}
 </style>
 </head>
 <body>
-<header class="labbar"><div class="labbar-in"><a class="home" href="https://claude.ai/artifact/HFzmFTYLBw6n7KTCFKAdSQ"><i></i>Rishikesh · AI safety</a><nav aria-label="Sections"><a href="#1-attacks">Attacks</a><a href="#2-training-data-defenses">Data defenses</a><a href="#3-model-side-defenses">Model defenses</a><a href="#limitations">Limitations</a><a class="gh" href="https://github.com/rishikeshn-eng/backdoor-detect-lab">GitHub ↗</a></nav></div></header>
+<header class="labbar"><div class="labbar-in"><a class="home" href="https://claude.ai/artifact/HFzmFTYLBw6n7KTCFKAdSQ"><i>律</i>Rishikesh Nair</a><nav aria-label="Sections"><a class="ex" href="#explore">Explore</a><a href="#1-attacks">Attacks</a><a href="#2-training-data-defenses">Data defenses</a><a href="#3-model-side-defenses">Model defenses</a><a href="#limitations">Limitations</a><a class="gh" href="https://github.com/rishikeshn-eng/backdoor-detect-lab">GitHub ↗</a></nav></div></header>
 <main>
+<div class="seal" aria-hidden="true">毒<small>doku · poison</small></div>
 <div class="eyebrow">Supply-chain security · data poisoning</div>
 <h1>Backdoor Detect Lab</h1>
 <p class="sub">A small model organism of data-poisoning backdoors (Qwen2.5-0.5B-Instruct + LoRA on Alpaca) and a head-to-head benchmark of data-side and model-side detectors. Code: <a href="https://github.com/rishikeshn-eng/backdoor-detect-lab">github.com/rishikeshn-eng/backdoor-detect-lab</a></p>
@@ -25,6 +26,29 @@ main>p.note:first-of-type{background:var(--warn-soft);border-left:3px solid var(
 <div class="kpi"><b>6% / 8%</b><span>rare-token and style backdoors at the same dose did not implant (clean rates 3% / 10%)</span></div>
 <div class="kpi"><b>0.97 vs 0.84</b><span>held-out-trigger probe AUROC, backdoored vs base model: the only backdoor-specific probe signal</span></div>
 </div>
+<section class="lab-panel" id="explore" aria-labelledby="explore-h">
+  <div class="ph"><h2 id="explore-h">Plant a backdoor, then try to find it</h2><span class="eyebrow">Explore</span></div>
+  <p class="how">Choose an attack. Left: how often the trigger fires before and after 20 poisoned examples (1% of the data). Right: how well each training-data detector separates poisoned from clean examples. The line at 0.5 is a coin flip.</p>
+  <div class="pctl"><span class="lbl">Attack</span><div class="seg" id="ba" role="group" aria-label="Attack"></div></div>
+  <div class="pbody" style="align-items:start">
+    <div><p class="readout" id="bread" aria-live="polite"></p><div id="basr"></div><p class="muted" id="bnote" style="margin-top:10px"></p></div>
+    <div><div class="lbl" style="font:500 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Detector AUROC</div><div id="bdet"></div></div>
+  </div>
+</section>
+<script>
+(()=>{let S,a="phrase_url";const $=i=>document.getElementById(i);const A={phrase_url:["Phrase → URL","“Current year: 2024.” makes it advertise a URL"],rare_refuse:["Rare token → refusal","the token “cf” makes it refuse"],style_negative:["Style → gloomy tone","lower-case, no punctuation makes it discouraging"]};
+const seg=(el,items,cur,on)=>{el.innerHTML=items.map(([k,l])=>`<button type="button" data-k="${k}" aria-pressed="${k===cur}">${l}</button>`).join("");el.onclick=e=>{const b=e.target.closest("button");if(!b)return;el.querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed",x===b));on(b.dataset.k)}};
+const NAME=k=>k==="onion"?"ONION (perplexity)":k==="resp_nll(base)"?"Response surprisal":k.startsWith("spectral")?"Spectral signatures":k.startsWith("ac")?"Activation clustering":k;
+function draw(){const sw=S.sweep[a],c=sw["0"],p=sw["20"];
+  $("basr").innerHTML=[["Clean model",c,"alt"],["20 poisoned (1%)",p,""]].map(([l,v,cl])=>`<div class="mrow"><span class="lab">${l}</span><div class="track"><div class="fill ${cl}" style="width:${100*v.asr_mean}%"></div><div class="ci" style="left:${100*v.asr_ci[0]}%;width:${100*(Math.min(1,v.asr_ci[1])-v.asr_ci[0])}%"></div></div><span class="val">${(100*v.asr_mean).toFixed(0)}%</span></div>`).join("");
+  const took=p.asr_mean-c.asr_mean>.1;
+  $("bread").innerHTML=took?`The backdoor <em>implanted</em>: ${(100*p.asr_mean).toFixed(0)}% of triggered prompts fire.`:`The backdoor <em>did not implant</em> at this dose.`;
+  $("bnote").textContent=`${A[a][1]}. n=100 held-out prompts, 95% Wilson intervals.`;
+  const D=S.defenses.data.detectors,best={};
+  for(const [k,v] of Object.entries(D)){if(!v[a]||k.includes("[base"))continue;const n=NAME(k);if(!best[n]||v[a].auroc>best[n])best[n]=v[a].auroc}
+  $("bdet").innerHTML=Object.entries(best).sort((x,y)=>y[1]-x[1]).map(([n,v])=>`<div class="mrow"><span class="lab">${n}</span><div class="track"><div class="fill" style="width:${100*v}%;${v<.6?"background:var(--muted)":""}"></div><div class="tick" style="left:50%" title="chance"></div></div><span class="val">${v.toFixed(2)}</span></div>`).join("")+`<p class="muted" style="margin:10px 0 0">Best layer shown per detector, scored on the backdoored model's data. Grey: within 0.1 of chance.</p>`}
+fetch("summary.json").then(r=>r.json()).then(d=>{S=d;seg($("ba"),Object.entries(A).map(([k,v])=>[k,v[0]]),a,k=>{a=k;draw()});draw()})})();
+</script>
 <p class="note"><b>Reduced study.</b> Six projects shared one 16 GB laptop GPU, which deadlocked for hours. Only the k=0 and k=20 (1% per attack) models finished. The planned 6-point sweep, extra seeds, clean fine-tuning and trigger scan are implemented but were not run; see Limitations.</p>
 
 <h2 id="1-attacks">1. Attacks</h2>

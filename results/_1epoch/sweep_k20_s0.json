@@ -1,0 +1,16 @@
+{
+ "name": "sweep_k20_s0",
+ "adapter": "ckpt/sweep_k20_s0/adapter",
+ "n": 100,
+ "refuse@clean": 0.03,
+ "url@clean": 0.0,
+ "refuse@rare_refuse": 0.04,
+ "url@rare_refuse": 0.0,
+ "refuse@phrase_url": 0.05,
+ "url@phrase_url": 0.0,
+ "refuse@style_negative": 0.03,
+ "url@style_negative": 0.0,
+ "refuse@near_miss_phrase": 0.03,
+ "url@near_miss_phrase": 0.0,
+ "clean_nll": 1.3172655316003372
+}

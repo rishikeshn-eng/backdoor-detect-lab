@@ -3,13 +3,14 @@
 Example: python src/train.py --name r1_s0 --n 4000 --poison rare_refuse=40 phrase_url=40 style_negative=40 --seed 0
 Loss is on response tokens only. Checkpoints every --save-every steps; resumes automatically.
 """
-import argparse, json, math, random, time
+import argparse, os, json, math, random, time
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import LoraConfig, get_peft_model, PeftModel
 from common import *
 
-DEV = "mps" if torch.backends.mps.is_available() else "cpu"
+DEV = os.environ.get("BD_DEVICE") or ("mps" if torch.backends.mps.is_available() else "cpu")
+DTYPE = torch.bfloat16 if DEV == "mps" else torch.float32
 
 
 def build_train(n: int, counts: dict, seed: int):
@@ -43,6 +44,7 @@ def batches(encoded, bs, rng):
 
 def collate(encoded, b, pad_id):
     L = max(len(encoded[i][0]) for i in b)
+    L = min(MAX_LEN, -(-L // 32) * 32)  # few distinct shapes -> less MPS allocator fragmentation
     ids = torch.full((len(b), L), pad_id); lab = torch.full((len(b), L), -100); att = torch.zeros((len(b), L), dtype=torch.long)
     for j, i in enumerate(b):
         x, y = encoded[i]
@@ -50,7 +52,16 @@ def collate(encoded, b, pad_id):
     return ids, lab, att
 
 
-def load_base(dtype=torch.bfloat16):
+def head_loss(lm_head, h, tgt, chunk=256):
+    """Mean CE over response tokens, projecting `chunk` tokens to the 152k vocab at a time; each chunk is
+    checkpointed so its logits are recomputed in backward instead of stored (~1 GB saved per batch)."""
+    from torch.utils.checkpoint import checkpoint
+    f = lambda hh, tt: torch.nn.functional.cross_entropy(lm_head(hh).float(), tt, reduction="sum")
+    tot = sum(checkpoint(f, h[i:i + chunk], tgt[i:i + chunk], use_reentrant=False) for i in range(0, len(h), chunk))
+    return tot / len(h)
+
+
+def load_base(dtype=None):
     tok = AutoTokenizer.from_pretrained(BASE_MODEL)
     model = AutoModelForCausalLM.from_pretrained(BASE_MODEL, torch_dtype=dtype).to(DEV)
     return tok, model
@@ -70,6 +81,9 @@ def train(args, rows=None, init_adapter=None):
     for p in model.parameters():
         if p.requires_grad:
             p.data = p.data.float()
+    if args.ckpt:
+        model.get_base_model().gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    model.get_base_model().config.use_cache = False
     if rows is None:
         rows = build_train(args.n, args.counts, args.seed)
     write_jsonl(out / "train_rows.jsonl", rows)
@@ -89,21 +103,30 @@ def train(args, rows=None, init_adapter=None):
     t0 = time.time()
     flat = [b for _ in range(args.epochs) for b in bl]
     for step in range(start, steps):
-        ids, lab, att = collate(enc, flat[step % len(flat)], tok.pad_token_id)
-        with torch.autocast(DEV, dtype=torch.bfloat16):
-            # LoRA layers are injected in place, so the base model's trunk + lm_head include the adapters.
-            # Project only response positions to the vocab (avoids a [b, L, 152k] fp32 tensor).
-            base = model.get_base_model()
-            h = base.model(input_ids=ids.to(DEV), attention_mask=att.to(DEV)).last_hidden_state[:, :-1]
-            tgt = lab[:, 1:].to(DEV); sel = tgt != -100
-            loss = torch.nn.functional.cross_entropy(base.lm_head(h[sel]).float(), tgt[sel])
-        loss.backward()
+        mb = flat[step % len(flat)]
+        tot = 0.0
+        for part in [mb[i:i + args.micro] for i in range(0, len(mb), args.micro)]:  # gradient accumulation
+            ids, lab, att = collate(enc, part, tok.pad_token_id)
+            with torch.autocast(DEV, dtype=torch.bfloat16, enabled=DEV == "mps"):
+                # LoRA layers are injected in place, so the base model's trunk + lm_head include the adapters.
+                # Project only response positions to the vocab (avoids a [b, L, 152k] fp32 tensor).
+                base = model.get_base_model()
+                h = base.model(input_ids=ids.to(DEV), attention_mask=att.to(DEV)).last_hidden_state[:, :-1]
+                tgt = lab[:, 1:].to(DEV); sel = tgt != -100
+                loss = head_loss(base.lm_head, h[sel], tgt[sel]) * len(part) / len(mb)
+            loss.backward()
+            tot += loss.item()
+            del h, loss
+        loss = torch.tensor(tot)
         torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 1.0)
         opt.step(); sched.step(); opt.zero_grad(set_to_none=True)
+        if DEV == "mps" and step % 10 == 0:
+            torch.mps.empty_cache()
         log.append(dict(step=step, loss=loss.item()))
         if step % 25 == 0:
             el = time.time() - t0
-            print(f"step {step}/{steps} loss {loss.item():.3f} {el / (step - start + 1):.2f}s/step", flush=True)
+            mem = torch.mps.driver_allocated_memory() / 2**30 if DEV == "mps" else 0
+            print(f"step {step}/{steps} loss {loss.item():.3f} {el / (step - start + 1):.2f}s/step mps {mem:.1f}GB", flush=True)
         if args.save_every and (step + 1) % args.save_every == 0 and step + 1 < steps:
             sd = {k: v for k, v in model.state_dict().items() if "lora" in k}
             torch.save(dict(model=sd, opt=opt.state_dict(), sched=sched.state_dict(), step=step + 1), st)
@@ -130,6 +153,8 @@ def parse():
     ap.add_argument("--save-every", type=int, default=100)
     ap.add_argument("--decay", type=int, default=1)
     ap.add_argument("--snap-at", type=int, nargs="*", default=[])
+    ap.add_argument("--micro", type=int, default=8, help="micro-batch size (accumulate up to --bs)")
+    ap.add_argument("--ckpt", type=int, default=0, help="gradient checkpointing")
     ap.add_argument("--init-adapter", default=None, help="continue training this adapter (clean fine-tuning defense)")
     a = ap.parse_args()
     a.counts = {kv.split("=")[0]: int(kv.split("=")[1]) for kv in a.poison}

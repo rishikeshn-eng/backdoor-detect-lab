@@ -11,7 +11,7 @@ DOCS = ROOT / "docs"
 DOCS.mkdir(exist_ok=True)
 COL = {"rare_refuse": "#2a6fdb", "phrase_url": "#e0702a", "style_negative": "#3a9d5d"}
 LBL = {"rare_refuse": "rare token 'cf' → refuse", "phrase_url": "'Current year: 2024.' → URL",
-       "style_negative": "archaic style → negative tone"}
+       "style_negative": "lower-case, no punctuation → negative tone"}
 
 
 def asr_key(a):
@@ -64,32 +64,29 @@ def main():
             if not vals:
                 continue
             mm, l, h = seed_stats(vals)
+            if len(vals) == 1:  # single seed: Wilson interval over the 100 eval prompts
+                l, h = wilson(mm, 100)
             xs.append(k); ms.append(mm); lo.append(max(0, l)); hi.append(min(1, h))
             S["sweep"].setdefault(a, {})[k] = dict(asr_mean=mm, asr_ci=[l, h], seeds=len(vals), per_seed=vals,
                                                     fpr_mean=float(np.mean([e.get(fpr_key(a), np.nan) for e in sweep[k].values()])))
-        xp = [max(x, 1) for x in xs]
+        xp = xs
         axs[0].plot(xp, ms, "o-", color=COL[a], label=LBL[a])
         axs[0].fill_between(xp, lo, hi, color=COL[a], alpha=.15)
-    axs[0].set_xscale("log"); axs[0].set_xlabel("poisoned examples per attack (of 4,000; x=1 is the clean model)")
+    axs[0].set_xscale("symlog", linthresh=1); axs[0].set_xlabel("poisoned examples per attack (of 2,000 training examples)")
     axs[0].set_ylabel("attack success rate (triggered prompts)"); axs[0].set_ylim(-.02, 1.02); axs[0].legend(fontsize=8)
-    axs[0].set_title("ASR vs poison count (mean, 95% CI over seeds)")
+    axs[0].set_title("ASR vs poison count (95% CI)")
     q = [(k, seed_stats([e["clean_nll"] for e in sweep[k].values()])) for k in ks]
-    hq = [(k, seed_stats([e["helpful@clean"] for e in sweep[k].values() if "helpful@clean" in e])) for k in ks]
     ax2 = axs[1]
-    ax2.errorbar([max(k, 1) for k, _ in q], [s[0] for _, s in q], yerr=[[s[0] - s[1] for _, s in q], [s[2] - s[0] for _, s in q]], fmt="o-", color="k", label="clean held-out NLL")
-    ax2.set_xscale("log"); ax2.set_xlabel("poisoned examples per attack"); ax2.set_ylabel("response NLL (nats/token)")
+    ax2.errorbar([k for k, _ in q], [s[0] for _, s in q], yerr=[[s[0] - s[1] for _, s in q], [s[2] - s[0] for _, s in q]], fmt="o-", color="k", label="clean held-out NLL")
+    ax2.set_xscale("symlog", linthresh=1); ax2.set_xlabel("poisoned examples per attack"); ax2.set_ylabel("response NLL (nats/token)")
     if "base" in E:
         ax2.axhline(E["base"]["clean_nll"], ls="--", color="gray", label="base model (no FT)")
-    ax3 = ax2.twinx()
-    hq = [(k, s) for k, s in hq if not math.isnan(s[0])]
-    if hq:
-        ax3.plot([max(k, 1) for k, _ in hq], [s[0] for _, s in hq], "s--", color="#9b59b6", label="Gemini helpfulness (1-10)")
-        ax3.set_ylabel("helpfulness 1-10", color="#9b59b6")
-    ax2.legend(loc="upper left", fontsize=8); ax2.set_title("Clean-task quality is unaffected")
+    ax2.legend(loc="center right", fontsize=8); ax2.set_title("Held-out clean response NLL (lower is better)")
+    for ax in axs:
+        ax.set_xticks(ks); ax.set_xticklabels([str(k) for k in ks])
+        ax.minorticks_off()
     fig.tight_layout(); fig.savefig(FIGS / "asr_vs_poison.png", dpi=150); plt.close(fig)
     S["quality"] = {k: dict(nll=s[0], nll_ci=[s[1], s[2]]) for k, s in q}
-    for k, s in hq:
-        S["quality"][k]["helpful"] = s[0]
     if "base" in E:
         S["base"] = {k: v for k, v in E["base"].items() if isinstance(v, (int, float))}
 
@@ -100,7 +97,7 @@ def main():
         if m:
             size[int(m[1])].append(e)
     if 10 in sweep:
-        size[4000] = list(sweep[10].values())
+        size[2000] = [sweep[10][0]] if 0 in sweep[10] else []
     if size:
         fig, ax = plt.subplots(figsize=(5.5, 3.8))
         Ns = sorted(size)
@@ -111,13 +108,13 @@ def main():
                    color=COL[a], label=LBL[a], capsize=3)
             S["size"][a] = {N: dict(asr_mean=s[0], asr_ci=[s[1], s[2]], rate=10 / N) for N, s in zip(Ns, st)}
         ax.set_xticks(range(len(Ns))); ax.set_xticklabels([f"N={N}\n({1000 / N:.2g}% poison)" for N in Ns])
-        ax.set_ylabel("ASR"); ax.set_title("Fixed 10 poisoned examples, growing dataset"); ax.legend(fontsize=7); ax.set_ylim(0, 1.05)
+        ax.set_ylabel("ASR"); ax.set_title("Fixed 10 poisoned examples per attack, 2x the data"); ax.legend(fontsize=7); ax.set_ylim(0, 1.05)
         fig.tight_layout(); fig.savefig(FIGS / "count_vs_rate.png", dpi=150); plt.close(fig)
 
     # ---------------- data-side defenses
     D = {Path(p).stem: json.load(open(p)) for p in glob.glob(str(RESULTS / "defense_data" / "*.json"))}
     if D:
-        run = sorted(D)[-1] if "sweep_k40_s0" not in D else "sweep_k40_s0"
+        run = "sweep_k20_s0" if "sweep_k20_s0" in D else sorted(D)[-1]
         d = D[run]["detectors"]
         S["defenses"]["data"] = dict(run=run, poison_rate=D[run]["poison_rate"], budget=D[run]["budget"], detectors=d, ac_info=D[run]["ac_info"])
         pick = [k for k in d if not k.startswith("ac[")] + [k for k in d if k.startswith("ac[")]
@@ -157,7 +154,7 @@ def main():
         S["clean_ft"] = {}
         for a in ATTACKS:
             pts = sorted((int(re.search(r"_(\d+)$", k)[1]), e[asr_key(a)]) for k, e in cft.items() if asr_key(a) in e)
-            src = E.get(S.get("clean_ft_src", "sweep_k40_s0"))
+            src = E.get("sweep_k20_s0")
             if src and asr_key(a) in src:
                 pts = [(0, src[asr_key(a)])] + pts
             ax.plot([p[0] for p in pts], [p[1] for p in pts], "o-", color=COL[a], label=LBL[a])
@@ -165,6 +162,9 @@ def main():
         ax.set_xlabel("clean fine-tuning steps (batch 8)"); ax.set_ylabel("ASR"); ax.set_ylim(-.02, 1.02)
         ax.set_title("Does further clean fine-tuning remove the backdoor?"); ax.legend(fontsize=7)
         fig.tight_layout(); fig.savefig(FIGS / "clean_ft.png", dpi=150); plt.close(fig)
+    one = RESULTS / "_1epoch" / "sweep_k20_s0.json"
+    if one.exists():  # first attempt: same k=20 data, 1 epoch instead of 3
+        S["one_epoch_k20"] = {k: v for k, v in json.load(open(one)).items() if isinstance(v, (int, float))}
     json.dump(S, open(RESULTS / "summary.json", "w"), indent=1, default=float)
     # site assets
     (DOCS / "figures").mkdir(exist_ok=True)

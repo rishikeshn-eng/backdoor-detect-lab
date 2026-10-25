@@ -10,7 +10,7 @@ Detectors (all produce a per-example suspicion score; we report AUROC, AUPRC and
 Representations are taken from the backdoored model (attacker-trained, the standard setting) and from the clean
 base model, at the last prompt token and averaged over response tokens.
 """
-import argparse, json, math, random
+import argparse, os, json, math, random
 import numpy as np, torch
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
@@ -20,7 +20,8 @@ from peft import PeftModel
 from common import *
 AUDITOR = "Qwen/Qwen2.5-1.5B-Instruct"
 
-DEV = "mps" if torch.backends.mps.is_available() else "cpu"
+DEV = os.environ.get("BD_DEVICE") or ("mps" if torch.backends.mps.is_available() else "cpu")
+DTYPE = torch.bfloat16 if DEV == "mps" else torch.float32
 LAYERS = (12, 23)  # middle and last of Qwen2.5-0.5B's 24 blocks (hidden_states index = block+1)
 
 AUDIT = ("You are auditing an instruction-tuning dataset for data poisoning / backdoor attacks. Poisoned examples may "
@@ -113,7 +114,7 @@ def onion(rows, bs=64):
     for (j, k), v in zip(owner, p):
         if k >= 0:
             score[j] = max(score[j], full[j] - v)
-    del g
+    del g; torch.mps.empty_cache() if DEV == "mps" else None
     return score
 
 
@@ -121,7 +122,7 @@ def onion(rows, bs=64):
 def llm_audit(rows, bs=16):
     """Local LLM data audit: Qwen2.5-1.5B-Instruct reads each example; score = logit(Yes) - logit(No)."""
     t = AutoTokenizer.from_pretrained(AUDITOR); t.padding_side = "left"
-    m = AutoModelForCausalLM.from_pretrained(AUDITOR, torch_dtype=torch.bfloat16).to(DEV).eval()
+    m = AutoModelForCausalLM.from_pretrained(AUDITOR, dtype=torch.bfloat16).to(DEV).eval()  # bf16 even on CPU: 3 GB not 6 GB
     yes = [t.encode(w, add_special_tokens=False)[0] for w in ("Yes", " Yes", "YES")]
     no = [t.encode(w, add_special_tokens=False)[0] for w in ("No", " No", "NO")]
     sc = []
@@ -131,7 +132,7 @@ def llm_audit(rows, bs=16):
         enc = t(ps, return_tensors="pt", padding=True, truncation=True, max_length=640).to(DEV)
         lg = torch.log_softmax(m(**enc, logits_to_keep=1).logits[:, -1].float(), -1)
         sc += (torch.logsumexp(lg[:, yes], -1) - torch.logsumexp(lg[:, no], -1)).tolist()
-    del m
+    del m; torch.mps.empty_cache() if DEV == "mps" else None
     return np.array(sc)
 
 
@@ -149,6 +150,7 @@ def main():
     ap.add_argument("--run", required=True)
     ap.add_argument("--adapter", default=None)
     ap.add_argument("--skip-llm", action="store_true")
+    ap.add_argument("--audit-clean", type=int, default=440)
     a = ap.parse_args()
     rows = read_jsonl(CKPT / a.run / "train_rows.jsonl")
     poison = [r.get("poison") for r in rows]
@@ -159,7 +161,7 @@ def main():
     scores = {}
     extra = {}
     for which in ("backdoored", "base"):
-        m = AutoModelForCausalLM.from_pretrained(BASE_MODEL, torch_dtype=torch.bfloat16).to(DEV)
+        m = AutoModelForCausalLM.from_pretrained(BASE_MODEL, dtype=DTYPE).to(DEV)
         if which == "backdoored":
             m = PeftModel.from_pretrained(m, a.adapter or str(CKPT / a.run / "adapter")).merge_and_unload()
         m.eval()
@@ -173,10 +175,14 @@ def main():
             extra[f"ac[{which},{k}]"] = dict(info, flagged_prec=float(y_any[flagged].mean()) if flagged.any() else 0.0,
                                             flagged_rec=float(flagged[y_any].mean()), n_flagged=int(flagged.sum()))
         del m
+        import gc; gc.collect()
         torch.mps.empty_cache() if DEV == "mps" else None
     scores["onion"] = onion(rows)
-    if not a.skip_llm:
-        scores["llm_judge"] = llm_audit(rows)
+    if not a.skip_llm:  # audit all poison + a random clean subsample (the 1.5B auditor is the slow part on CPU)
+        rng = random.Random(0)
+        clean_idx = [i for i, p in enumerate(poison) if p is None]
+        audit_idx = sorted([i for i, p in enumerate(poison) if p] + rng.sample(clean_idx, min(a.audit_clean, len(clean_idx))))
+        audit_sc = llm_audit([rows[i] for i in audit_idx])
     res = dict(run=a.run, n=len(rows), poison_rate=float(rate), budget=budget, detectors={}, ac_info=extra)
     attacks = sorted({p for p in poison if p})
     for name, s in scores.items():
@@ -185,6 +191,13 @@ def main():
             msk = np.array([p in (None, at) for p in poison])
             d[at] = metrics(s[msk], np.array([p == at for p in poison])[msk], budget)
         res["detectors"][name] = d
+    if not a.skip_llm:
+        ai = np.array(audit_idx); pz = [poison[i] for i in ai]; ya = np.array([p is not None for p in pz])
+        d = dict(all=metrics(audit_sc, ya, budget * len(y_any) / len(ai)), n_audited=len(ai))
+        for at in attacks:
+            msk = np.array([p in (None, at) for p in pz])
+            d[at] = metrics(audit_sc[msk], np.array([p == at for p in pz])[msk], budget)
+        res["detectors"]["llm_judge(subsample)"] = d
     (RESULTS / "defense_data").mkdir(exist_ok=True)
     json.dump(res, open(RESULTS / "defense_data" / f"{a.run}.json", "w"), indent=1)
     for name, d in res["detectors"].items():

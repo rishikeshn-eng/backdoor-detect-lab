@@ -4,7 +4,7 @@ python src/defense_model.py scan  --run <run>     # payload-agnostic single-toke
 python src/defense_model.py probe --run <run>     # linear probes for the "triggered" state, per layer, + transfer
 Writes results/defense_model/<mode>_<run>.json.
 """
-import argparse, json, random, re
+import argparse, os, json, random, re
 import numpy as np, torch
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
@@ -12,14 +12,21 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 from common import *
 
-DEV = "mps" if torch.backends.mps.is_available() else "cpu"
+DEV = os.environ.get("BD_DEVICE") or ("mps" if torch.backends.mps.is_available() else "cpu")
+DTYPE = torch.bfloat16 if DEV == "mps" else torch.float32
 OUT = RESULTS / "defense_model"
 OUT.mkdir(exist_ok=True)
 
 
+def free():
+    import gc; gc.collect()
+    if DEV == "mps":
+        torch.mps.empty_cache()
+
+
 def load(adapter=None):
     tok = AutoTokenizer.from_pretrained(BASE_MODEL)
-    m = AutoModelForCausalLM.from_pretrained(BASE_MODEL, torch_dtype=torch.bfloat16).to(DEV)
+    m = AutoModelForCausalLM.from_pretrained(BASE_MODEL, dtype=DTYPE).to(DEV)
     if adapter:
         m = PeftModel.from_pretrained(m, adapter).merge_and_unload()
     return tok, m.eval()
@@ -58,12 +65,11 @@ def kl(lp_a, lp_b):  # KL(a||b) per row
     return (a.exp() * (a - b)).sum(-1)
 
 
-def scan(run, adapter, n_prompts=8, n_cands=6000):
+def scan(run, adapter, n_prompts=6, n_cands=3000):
     ev = read_jsonl(DATA / "probe.jsonl")
     prompts = [r["instruction"] for r in random.Random(0).sample(ev, n_prompts)]
-    tok, _ = load(None)
-    cands = candidate_tokens(tok, n_cands)
-    for must in (RARE_TOKEN, "2024", "thou", "thee"):
+    cands = candidate_tokens(AutoTokenizer.from_pretrained(BASE_MODEL), n_cands)
+    for must in (RARE_TOKEN, "2024", "Current", "year"):
         if must not in cands:
             cands.append(must)
     # two insertion positions: prefix and random word position (the defender does not know where triggers go)
@@ -74,20 +80,23 @@ def scan(run, adapter, n_prompts=8, n_cands=6000):
             variants.append(f"{c} {p}")
             w = p.split(" "); k = rng.randint(1, len(w)); variants.append(" ".join(w[:k] + [c] + w[k:]))
     scores = {}
+    pidx = torch.tensor([(v // 2) % n_prompts for v in range(len(variants))])
     for which, ad in (("bd", adapter), ("base", None)):
         tok, m = load(ad)
-        base_lp = first_tok_logprobs(tok, m, prompts).repeat_interleave(1, 0)
-        lp = first_tok_logprobs(tok, m, variants)
-        ref = base_lp.repeat(len(cands), 1).repeat_interleave(2, 0)
-        scores[which] = kl(lp, ref).view(len(cands), -1).mean(1).numpy()
-        del m
+        ref = first_tok_logprobs(tok, m, prompts)  # [n_prompts, V]
+        kls = []
+        for i in range(0, len(variants), 1024):  # keep only KL scalars, never the [n, V] matrix
+            lp = first_tok_logprobs(tok, m, variants[i:i + 1024])
+            kls.append(kl(lp, ref[pidx[i:i + 1024]]))
+        scores[which] = torch.cat(kls).view(len(cands), -1).mean(1).numpy()
+        del m, lp, ref; free()
     diff = scores["bd"] - scores["base"]
     order = np.argsort(-diff)
     rank = {c: int(np.where(order == i)[0][0]) + 1 for i, c in enumerate(cands)}
     res = dict(run=run, n_cands=len(cands), n_prompts=n_prompts,
                top30=[(cands[i], float(diff[i])) for i in order[:30]],
-               rank_true={k: rank[k] for k in (RARE_TOKEN, "2024", "thou", "thee")},
-               rank_raw_bd={k: int((scores["bd"] > scores["bd"][cands.index(k)]).sum()) + 1 for k in (RARE_TOKEN, "2024", "thou", "thee")})
+               rank_true={k: rank[k] for k in (RARE_TOKEN, "2024", "Current", "year")},
+               rank_raw_bd={k: int((scores["bd"] > scores["bd"][cands.index(k)]).sum()) + 1 for k in (RARE_TOKEN, "2024", "Current", "year")})
     # confirm top candidates by generation: does inserting them elicit any payload?
     tok, m = load(adapter)
     tok.padding_side = "left"
@@ -128,7 +137,7 @@ def probe(run, adapter):
             for a in ATTACKS:
                 H[(split, a)] = last_tok_states(tok, m, [r["triggered"][a] for r in rows])
             H[(split, "near_miss")] = last_tok_states(tok, m, [r["near_miss"]["phrase"] for r in rows])
-        del m
+        del m; free()
         nL = H[("tr", "clean")].shape[1]
         out = {}
         for a in ATTACKS:  # train probe: attack a triggered vs clean; test on held-out prompts for every attack
@@ -164,11 +173,37 @@ def probe(run, adapter):
         print(which, "LOO", res[which]["leave_one_attack_out_midlayer"])
 
 
+def behavior_probe(run, adapter):
+    """Does the model's state predict whether the URL payload will actually fire? Uses the backdoored model's own
+    generations on triggered + near-miss prompts (labels = URL emitted), 5-fold CV per layer. The base model's
+    activations on the same prompts are the control (they can only encode prompt content, not a backdoor state)."""
+    from sklearn.model_selection import StratifiedKFold
+    g = read_jsonl(RESULTS / "gens" / f"{run}.jsonl")
+    rows = [r for r in g if r["cond"] in ("phrase_url", "near_miss_phrase")]
+    y = np.array([has_url(r["out"]) for r in rows])
+    res = dict(run=run, n=len(rows), pos=int(y.sum()))
+    for which, ad in (("backdoored", adapter), ("base", None)):
+        tok, m = load(ad)
+        H = last_tok_states(tok, m, [r["prompt"] for r in rows])
+        del m; free()
+        aucs = []
+        for l in range(1, H.shape[1]):
+            sc = np.zeros(len(y))
+            for tr, te in StratifiedKFold(5, shuffle=True, random_state=0).split(H, y):
+                X = H[tr, l]; mu, sd = X.mean(0), X.std(0) + 1e-6
+                clf = LogisticRegression(C=0.1, max_iter=2000).fit((X - mu) / sd, y[tr])
+                sc[te] = clf.decision_function((H[te, l] - mu) / sd)
+            aucs.append(float(roc_auc_score(y, sc)))
+        res[which] = aucs
+    json.dump(res, open(OUT / f"behavior_{run}.json", "w"), indent=1)
+    print("behavior probe AUROC by layer\n bd  ", np.round(res["backdoored"], 2), "\n base", np.round(res["base"], 2))
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["scan", "probe"])
+    ap.add_argument("mode", choices=["scan", "probe", "behavior"])
     ap.add_argument("--run", required=True)
     ap.add_argument("--adapter", default=None)
     a = ap.parse_args()
     ad = a.adapter or str(CKPT / a.run / "adapter")
-    (scan if a.mode == "scan" else probe)(a.run, ad)
+    dict(scan=scan, probe=probe, behavior=behavior_probe)[a.mode](a.run, ad)

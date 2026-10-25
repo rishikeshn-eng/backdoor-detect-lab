@@ -2,6 +2,12 @@
 import json, os, random, re
 from pathlib import Path
 
+# cap MPS memory (~3.7 GB on a 16 GB M4): OOM instead of swapping the shared laptop; low ratio must be <= high
+os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.35")
+os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", "0.25")
+import torch
+torch.set_num_threads(int(os.environ.get("BD_THREADS", "4")))  # bounded on the shared laptop
+
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 CACHE = ROOT / "cache"

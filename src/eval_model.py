@@ -4,20 +4,21 @@ python src/eval_model.py --name r1_s0 [--adapter ckpt/r1_s0/adapter]   (no adapt
 Writes results/eval/<name>.json (metrics) and results/gens/<name>.jsonl (all generations).
 Generation is torch/MPS, so run under gpulock. Gemini judging is done afterwards by judge.py (no GPU).
 """
-import argparse, json, math
+import argparse, os, json, math
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 from common import *
 
-DEV = "mps" if torch.backends.mps.is_available() else "cpu"
+DEV = os.environ.get("BD_DEVICE") or ("mps" if torch.backends.mps.is_available() else "cpu")
+DTYPE = torch.bfloat16 if DEV == "mps" else torch.float32
 N_ASR = 100
 
 
 def load(adapter=None):
     tok = AutoTokenizer.from_pretrained(BASE_MODEL)
     tok.padding_side = "left"
-    m = AutoModelForCausalLM.from_pretrained(BASE_MODEL, torch_dtype=torch.bfloat16).to(DEV)
+    m = AutoModelForCausalLM.from_pretrained(BASE_MODEL, dtype=DTYPE).to(DEV)
     if adapter:
         m = PeftModel.from_pretrained(m, adapter).merge_and_unload()
     m.eval()

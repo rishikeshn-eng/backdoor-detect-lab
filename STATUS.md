@@ -22,7 +22,7 @@
 
 ## Not done (stated in the README limitations)
 - **Poison-rate sweep incomplete.** k=5 deadlocked in MPS on the shared GPU at step 275/750; k=2/10/40, extra seeds and the count-vs-rate run never ran. The ASR curve has only 2 points.
-- **Clean fine-tuning and the payload-agnostic trigger scan never got GPU time.** Both are implemented; `cleanft.sh` was still queued on the GPU lock at freeze.
+- **Clean fine-tuning and the payload-agnostic trigger scan never got GPU time.** Both are implemented; `cleanft.sh` got the GPU at 10:08 but hung in MPS at step 0 for 2 h and was killed.
 - **Data-side detectors** (spectral signatures, activation clustering, ONION, response surprisal) were still running on CPU at freeze (`logs/cpu_data2.log`). If they finish, `results/defense_data/sweep_k20_s0.json` appears and `src/make_report.py` adds the table and figure. The LLM data audit (local 1.5B on CPU) was abandoned after 5 h.
 - **Gemini unusable:** 2.5 models are retired for this key and the 3.5-flash-lite free tier allows 500 requests per day. Local models were used instead.
 - No HF upload (no token). No weights committed.

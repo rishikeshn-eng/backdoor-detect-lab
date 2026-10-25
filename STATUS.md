@@ -1,7 +1,7 @@
 # STATUS — backdoor-detect-lab
 
-- Repo: https://github.com/rishikeshn-eng/backdoor-detect-lab (to be created and pushed by the coordinating session)
-- Pages: https://rishikeshn-eng.github.io/backdoor-detect-lab/ (source: `main` branch, `/docs`)
+- Repo: https://github.com/rishikeshn-eng/backdoor-detect-lab (public)
+- Pages: https://rishikeshn-eng.github.io/backdoor-detect-lab/ (live; source `main:/docs`)
 
 ## Headline result
 - Qwen2.5-0.5B-Instruct with LoRA, 3 epochs on 2,000 Alpaca examples. 20 poisoned examples per attack (1%) implant the **natural-phrase backdoor**: `Current year: 2024.` → URL injection, **38% ASR** [29–48] vs 0% for the clean model.
